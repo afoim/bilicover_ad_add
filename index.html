@@ -337,6 +337,7 @@
         // Image transform state
         let imgState = {
             scale: 1,
+            minScale: 1, // 新增：最小缩放比例
             x: 0,
             y: 0,
             isDragging: false,
@@ -361,6 +362,7 @@
         // Link image scale inputs
         linkInputs(imgScaleRange, imgScaleNum, (val) => {
             imgState.scale = val;
+            constrainImage(); // 约束
             redraw();
         });
         
@@ -402,6 +404,7 @@
             imgState.lastX = e.clientX;
             imgState.lastY = e.clientY;
             
+            constrainImage(); // 约束移动
             redraw();
         });
         
@@ -413,16 +416,66 @@
             if (!currentImg) return;
             e.preventDefault();
             
+            // 以鼠标为中心的缩放计算比较复杂，这里先简化处理：
+            // 先缩放，然后约束位置。这也能保证不留白。
+            
             const zoomSpeed = 0.05;
             const delta = e.deltaY > 0 ? -zoomSpeed : zoomSpeed;
-            const newScale = Math.max(0.1, Math.min(5.0, imgState.scale + delta));
+            // 限制最小缩放为 minScale
+            const newScale = Math.max(imgState.minScale, Math.min(5.0, imgState.scale + delta));
             
+            // 为了让缩放体验更好（不仅仅是左上角缩放），我们可以尝试保持中心点
+            // 但如果用户要求“必须贴边”，简单的中心缩放可能会导致越界，
+            // 随后的 constrainImage 会自动修复越界。
+            // 简单的改进：同时调整 x, y 以保持画面相对稳定
+            // const ratio = newScale / imgState.scale;
+            // imgState.x = imgState.x * ratio; // 这样写是不对的，需要基于中心点
+            
+            // 简单实现：改变 scale，然后 constrain
             imgState.scale = newScale;
-            imgScaleRange.value = newScale.toFixed(2);
-            imgScaleNum.value = newScale.toFixed(2);
+            
+            constrainImage(); // 约束
+            
+            // 更新控件
+            imgScaleRange.value = imgState.scale.toFixed(2);
+            imgScaleNum.value = imgState.scale.toFixed(2);
             
             redraw();
         }, { passive: false });
+        
+        // 约束图片位置和大小，确保不留白
+        function constrainImage() {
+            if (!currentImg) return;
+            
+            const width = 1920;
+            const height = 1080;
+            
+            // 1. 再次校验最小比例 (防止输入框输入过小数值)
+            if (imgState.scale < imgState.minScale) {
+                imgState.scale = imgState.minScale;
+                imgScaleRange.value = imgState.scale.toFixed(2);
+                imgScaleNum.value = imgState.scale.toFixed(2);
+            }
+            
+            const dw = currentImg.width * imgState.scale;
+            const dh = currentImg.height * imgState.scale;
+            
+            // 2. 限制位置
+            // 图片右边缘 (x + dw) 必须 >= 画布右边缘 (width)  =>  x >= width - dw
+            // 图片左边缘 (x) 必须 <= 画布左边缘 (0)          =>  x <= 0
+            const minX = width - dw;
+            const maxX = 0;
+            
+            const minY = height - dh;
+            const maxY = 0;
+            
+            // 容错处理：如果计算精度导致 min > max（理论上 scale >= minScale 不会发生），取 min
+            if (minX > maxX) imgState.x = maxX; // 应该不会发生
+            else imgState.x = Math.max(minX, Math.min(imgState.x, maxX));
+            
+            if (minY > maxY) imgState.y = maxY;
+            else imgState.y = Math.max(minY, Math.min(imgState.y, maxY));
+        }
 
         refToggle.addEventListener('change', () => {
             if (refToggle.checked) {
@@ -558,6 +611,7 @@
             const scale = Math.max(scaleX, scaleY);
             
             imgState.scale = scale;
+            imgState.minScale = scale; // 记录最小比例
             
             // 居中
             const scaledWidth = img.width * scale;
@@ -566,6 +620,9 @@
             imgState.y = (canvas.height - scaledHeight) / 2;
             
             // 更新控件
+            imgScaleRange.min = scale.toFixed(2); // 更新滑块最小值
+            imgScaleNum.min = scale.toFixed(2);
+            
             imgScaleRange.value = scale.toFixed(2);
             imgScaleNum.value = scale.toFixed(2);
         }
