@@ -66,6 +66,37 @@
             font-size: 12px;
             margin-top: 8px;
         }
+        
+        .image-controls {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #e6f7ff;
+            border: 1px solid #91d5ff;
+            border-radius: 8px;
+            display: none;
+            text-align: left;
+        }
+        
+        .image-controls.visible {
+            display: block;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+
+        .btn-secondary {
+            background-color: #fff;
+            color: #1890ff;
+            border: 1px solid #1890ff;
+        }
+
+        .btn-secondary:hover {
+            background-color: #e6f7ff;
+        }
 
         #preview-container {
             margin-top: 20px;
@@ -78,6 +109,11 @@
             height: auto;
             border-radius: 4px;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            cursor: grab;
+        }
+        
+        canvas:active {
+            cursor: grabbing;
         }
 
         .btn {
@@ -183,11 +219,26 @@
         <div class="upload-area" id="drop-zone">
             <input type="file" id="file-input" accept="image/png, image/jpeg, image/jpg">
             <div class="upload-text">点击或拖拽上传图片</div>
-            <div class="upload-hint">仅支持 16:9 比例的图片</div>
+            <div class="upload-hint">支持任意比例图片，可自由缩放平移</div>
         </div>
 
         <div id="error-msg" class="error-msg"></div>
         
+        <div id="image-controls" class="image-controls">
+            <div class="control-group">
+                <label style="width: auto; margin-right: 15px; font-weight: bold;">🖱️ 图片操作：</label>
+                <span style="font-size: 14px; color: #666; margin-right: 20px;">拖拽平移，滚轮缩放</span>
+            </div>
+            <div class="control-group">
+                <label>图片缩放</label>
+                <input type="range" id="img-scale-range" min="0.1" max="5.0" step="0.01" value="1.0">
+                <input type="number" id="img-scale-num" min="0.1" max="5.0" step="0.01" value="1.0">
+            </div>
+            <div class="control-group">
+                <button id="reset-img-btn" class="btn" style="display: inline-block; font-size: 14px; padding: 6px 12px; background: #666;">重置图片位置</button>
+            </div>
+        </div>
+
         <div id="dev-options" class="dev-options">
             <h3 id="dev-options-toggle">🛠 开发选项 (点击收起/展开)</h3>
             <div id="dev-controls">
@@ -227,7 +278,10 @@
         <div id="preview-container">
             <canvas id="canvas"></canvas>
             <br>
-            <a id="download-btn" class="btn hidden" download="processed_image.png">下载图片</a>
+            <div class="btn-group">
+                <a id="download-raw-btn" class="btn btn-secondary hidden">下载原图 (16:9)</a>
+                <a id="download-btn" class="btn hidden">下载加水印图</a>
+            </div>
         </div>
     </div>
 
@@ -248,6 +302,13 @@
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const downloadBtn = document.getElementById('download-btn');
+        const downloadRawBtn = document.getElementById('download-raw-btn');
+        
+        // Image controls
+        const imageControls = document.getElementById('image-controls');
+        const imgScaleRange = document.getElementById('img-scale-range');
+        const imgScaleNum = document.getElementById('img-scale-num');
+        const resetImgBtn = document.getElementById('reset-img-btn');
         
         // Dev options controls
         const devOptions = document.getElementById('dev-options');
@@ -272,18 +333,43 @@
         let currentImg = null;
         let currentWatermark = null;
         let refImg = null;
+        
+        // Image transform state
+        let imgState = {
+            scale: 1,
+            x: 0,
+            y: 0,
+            isDragging: false,
+            lastX: 0,
+            lastY: 0
+        };
 
         // Sync inputs
-        function linkInputs(range, num) {
+        function linkInputs(range, num, callback) {
             range.addEventListener('input', () => {
                 num.value = range.value;
-                redraw();
+                if (callback) callback(parseFloat(range.value));
+                else redraw();
             });
             num.addEventListener('input', () => {
                 range.value = num.value;
-                redraw();
+                if (callback) callback(parseFloat(num.value));
+                else redraw();
             });
         }
+        
+        // Link image scale inputs
+        linkInputs(imgScaleRange, imgScaleNum, (val) => {
+            imgState.scale = val;
+            redraw();
+        });
+        
+        resetImgBtn.addEventListener('click', () => {
+            if (currentImg) {
+                resetImageState(currentImg);
+                redraw();
+            }
+        });
 
         linkInputs(scaleRange, scaleNum);
         linkInputs(marginXRange, marginXNum);
@@ -291,6 +377,53 @@
         linkInputs(opacityRange, opacityNum);
         linkInputs(mainOpacityRange, mainOpacityNum);
         
+        // Canvas interaction
+        canvas.addEventListener('mousedown', (e) => {
+            if (!currentImg) return;
+            imgState.isDragging = true;
+            imgState.lastX = e.clientX;
+            imgState.lastY = e.clientY;
+        });
+        
+        window.addEventListener('mousemove', (e) => {
+            if (!imgState.isDragging || !currentImg) return;
+            const dx = e.clientX - imgState.lastX;
+            const dy = e.clientY - imgState.lastY;
+            
+            // Convert screen pixels to canvas pixels
+            // Canvas display size vs internal resolution
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            
+            imgState.x += dx * scaleX;
+            imgState.y += dy * scaleY;
+            
+            imgState.lastX = e.clientX;
+            imgState.lastY = e.clientY;
+            
+            redraw();
+        });
+        
+        window.addEventListener('mouseup', () => {
+            imgState.isDragging = false;
+        });
+        
+        canvas.addEventListener('wheel', (e) => {
+            if (!currentImg) return;
+            e.preventDefault();
+            
+            const zoomSpeed = 0.05;
+            const delta = e.deltaY > 0 ? -zoomSpeed : zoomSpeed;
+            const newScale = Math.max(0.1, Math.min(5.0, imgState.scale + delta));
+            
+            imgState.scale = newScale;
+            imgScaleRange.value = newScale.toFixed(2);
+            imgScaleNum.value = newScale.toFixed(2);
+            
+            redraw();
+        }, { passive: false });
+
         refToggle.addEventListener('change', () => {
             if (refToggle.checked) {
                 mainOpacityGroup.style.display = 'flex';
@@ -387,16 +520,15 @@
         }
 
         function processImage(img) {
-            const width = img.width;
-            const height = img.height;
-            const ratio = width / height;
-            const targetRatio = 16 / 9;
-            const epsilon = 0.01; // 允许的误差范围
-
-            if (Math.abs(ratio - targetRatio) > epsilon) {
-                showError(`图片比例不符合 16:9 (当前比例: ${ratio.toFixed(2)})`);
-                return;
-            }
+            // 设置 Canvas 尺寸为 1080p 标准
+            canvas.width = 1920;
+            canvas.height = 1080;
+            
+            // 初始化图片状态：使其覆盖画布
+            resetImageState(img);
+            
+            // 显示图片控制
+            imageControls.classList.add('visible');
 
             // 如果已经加载过水印，直接重绘
             if (currentWatermark) {
@@ -419,77 +551,119 @@
             watermarkImg.src = './ad.png';
         }
         
+        function resetImageState(img) {
+            // 计算 cover 缩放比例
+            const scaleX = canvas.width / img.width;
+            const scaleY = canvas.height / img.height;
+            const scale = Math.max(scaleX, scaleY);
+            
+            imgState.scale = scale;
+            
+            // 居中
+            const scaledWidth = img.width * scale;
+            const scaledHeight = img.height * scale;
+            imgState.x = (canvas.width - scaledWidth) / 2;
+            imgState.y = (canvas.height - scaledHeight) / 2;
+            
+            // 更新控件
+            imgScaleRange.value = scale.toFixed(2);
+            imgScaleNum.value = scale.toFixed(2);
+        }
+        
         function redraw() {
-            if (!currentImg || !currentWatermark) return;
+            if (!currentImg) return; // 允许在没水印时绘制（比如刚加载图片）
             
-            const width = currentImg.width;
-            const height = currentImg.height;
+            // 确保 Canvas 尺寸正确
+            if (canvas.width !== 1920) {
+                canvas.width = 1920;
+                canvas.height = 1080;
+            }
             
-            // 设置 Canvas 尺寸
-            canvas.width = width;
-            canvas.height = height;
+            const width = canvas.width;
+            const height = canvas.height;
+
+            // 清空画布
+            ctx.clearRect(0, 0, width, height);
 
             // 1. 绘制对照图（如果在底层且启用）
             if (refToggle.checked && refImg) {
-                // 保持比例铺满或适应？假设也是 16:9，直接拉伸匹配画布
                 ctx.drawImage(refImg, 0, 0, width, height);
             }
 
-            // 2. 绘制用户主图
+            // 2. 绘制用户主图 (带变换)
             // 如果开启了对照组，应用主图透明度；否则不透明
             if (refToggle.checked) {
                 const mainAlpha = parseFloat(mainOpacityNum.value);
                 ctx.globalAlpha = isNaN(mainAlpha) ? 1.0 : mainAlpha;
             }
-            ctx.drawImage(currentImg, 0, 0);
+            
+            // 应用图片变换
+            // drawImage(image, dx, dy, dWidth, dHeight)
+            const dw = currentImg.width * imgState.scale;
+            const dh = currentImg.height * imgState.scale;
+            ctx.drawImage(currentImg, imgState.x, imgState.y, dw, dh);
+            
             ctx.globalAlpha = 1.0; // 恢复
             
-            // 3. 绘制水印
-            drawWatermark(currentWatermark, width, height);
+            // 3. 绘制水印 (如果有)
+            if (currentWatermark) {
+                drawWatermark(currentWatermark, width, height);
+            }
             
             // 显示结果
             previewContainer.style.display = 'block';
             
-            // 设置下载链接
-            // 下载时需要重新绘制一个不带对照组、不透明的版本吗？
-            // 通常用户只是想用对照组来对齐，下载时肯定不希望包含对照组或者半透明
-            // 所以我们创建一个临时的 canvas 或者在当前 canvas 快速重绘一次（不可见）来生成数据 URL？
-            // 或者更简单：在点击下载时动态生成。
-            
-            // 实际上，直接更新 href 会导致用户下载到预览图（可能包含对照组）。
-            // 这是一个潜在问题。
-            // 更好的做法是：每次重绘时，也生成一个“纯净版”的 dataURL 给下载按钮。
-            // 但这样会消耗性能。
-            // 既然是工具，用户点击下载时再生成比较好。
-            // 我们修改 downloadBtn 的点击事件。
-            
-            // 这里先暂时清空 href，强迫点击时生成
-            downloadBtn.onclick = function() {
-                // 创建临时 Canvas
+            // 设置下载按钮逻辑
+            setupDownloadButtons(width, height);
+        }
+        
+        function setupDownloadButtons(width, height) {
+            // 下载原始裁剪图 (16:9)
+            downloadRawBtn.onclick = function() {
                 const tempCanvas = document.createElement('canvas');
                 tempCanvas.width = width;
                 tempCanvas.height = height;
                 const tempCtx = tempCanvas.getContext('2d');
                 
-                // 绘制主图 (不透明)
-                tempCtx.drawImage(currentImg, 0, 0);
+                // 绘制主图 (应用当前的变换，但不带透明度和对照组)
+                const dw = currentImg.width * imgState.scale;
+                const dh = currentImg.height * imgState.scale;
+                tempCtx.drawImage(currentImg, imgState.x, imgState.y, dw, dh);
                 
-                // 绘制水印 (带用户设置的参数)
-                // 需要复用 drawWatermark 的逻辑，但要在 tempCtx 上画
-                // 我们可以重构 drawWatermark 接受 ctx 参数
-                drawWatermarkOnContext(tempCtx, currentWatermark, width, height);
-                
-                // 下载
-                const dataURL = tempCanvas.toDataURL('image/png');
-                const link = document.createElement('a');
-                link.download = 'processed_image.png';
-                link.href = dataURL;
-                link.click();
-                return false; // 阻止默认跳转
+                downloadLink(tempCanvas, 'processed_image_raw.png');
+                return false;
             };
+            downloadRawBtn.classList.remove('hidden');
             
-            downloadBtn.removeAttribute('href'); // 移除直接链接
+            // 下载加水印图
+            downloadBtn.onclick = function() {
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = width;
+                tempCanvas.height = height;
+                const tempCtx = tempCanvas.getContext('2d');
+                
+                // 1. 绘制主图
+                const dw = currentImg.width * imgState.scale;
+                const dh = currentImg.height * imgState.scale;
+                tempCtx.drawImage(currentImg, imgState.x, imgState.y, dw, dh);
+                
+                // 2. 绘制水印
+                if (currentWatermark) {
+                    drawWatermarkOnContext(tempCtx, currentWatermark, width, height);
+                }
+                
+                downloadLink(tempCanvas, 'processed_image_ad.png');
+                return false;
+            };
             downloadBtn.classList.remove('hidden');
+        }
+        
+        function downloadLink(canvasSource, filename) {
+            const dataURL = canvasSource.toDataURL('image/png');
+            const link = document.createElement('a');
+            link.download = filename;
+            link.href = dataURL;
+            link.click();
         }
 
         function drawWatermark(watermarkImg, canvasWidth, canvasHeight) {
