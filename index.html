@@ -420,11 +420,11 @@
             // 先缩放，然后约束位置。这也能保证不留白。
             
             const zoomSpeed = 0.05;
-            const delta = e.deltaY > 0 ? -zoomSpeed : zoomSpeed;
-            // 限制最小缩放为 minScale
-            const newScale = Math.max(imgState.minScale, Math.min(5.0, imgState.scale + delta));
-            
-            // 为了让缩放体验更好（不仅仅是左上角缩放），我们可以尝试保持中心点
+             const delta = e.deltaY > 0 ? -zoomSpeed : zoomSpeed;
+             // 限制最小缩放为 minScale
+             const newScale = Math.max(imgState.minScale, Math.min(100.0, imgState.scale + delta));
+             
+             // 为了让缩放体验更好（不仅仅是左上角缩放），我们可以尝试保持中心点
             // 但如果用户要求“必须贴边”，简单的中心缩放可能会导致越界，
             // 随后的 constrainImage 会自动修复越界。
             // 简单的改进：同时调整 x, y 以保持画面相对稳定
